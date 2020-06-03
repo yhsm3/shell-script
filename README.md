@@ -1,1 +1,1 @@
-学习编程最好的方法，就是通过案例不断实践。
+The best way to learning promgraming is practice practice and practice.
