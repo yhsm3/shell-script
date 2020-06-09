@@ -38,4 +38,4 @@ a
 EOF
 )
 printf "总和：%d\n个数：%d\n" $sum $count
-printf "均值：%.2f\n标准差：%.2f\n" $average $answer
+printf "均值：%.2f\n标准差：%.2f\n" $average $answer #使用printf输出可以保证小数点前的0会输出，echo会（0.23---> .23）丢失前导0
