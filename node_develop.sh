@@ -7,22 +7,53 @@ set -e
 
 # -------------------------------适配不同linux发行版 begin------------------------------
 # centos7上可运行，其他发行版未测试
+
 start_docker(){
-    systctl enable docker
-    systctl start docker
-    systctl status docker
+    start_num=0
+	while true; do
+	    status=$(systemctl show --property ActiveState docker)
+	    if [ $status = "ActiveState=active" ]; then
+		    echo "docker正在运行..."
+		    break
+	    else
+            if [ $start_num -eq 3 ]; then
+                echo "docker启动失败，请检查！" >&2
+                exit 1
+            else
+                echo "尝试启动docker..."
+                systemctl start docker
+            fi
+            let start_num+=1
+	    fi
+	done
+    systemctl status docker
 }
 
-install_docker_local(){
-    # 设置 yum repository
-    yum install -y yum-utils \
-    device-mapper-persistent-data \
-    lvm2
-    yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+install_docker_offline(){
+    # 在有网络的环境下下载离线软件到指定目录
+    # sudo yum install --downloadonly --downloaddir=~/docker19.03-package docker-ce-19.03.8-3.el7 docker-ce-cli-19.03.8-3.el7
 
-    # 安装并启动 docker
-    yum install -y docker-ce-19.03.8 docker-ce-cli-19.03.8 containerd.io
+    cd ~/docker19.03-package
+
+    start_num=0
+	while true; do
+	    if docker -v ; then
+		    echo "docker安装成功"
+		    break
+	    else
+            if [ $start_num -eq 3 ]; then
+                echo "docker安装失败，请检查！" >&2
+                exit 1
+            else
+                echo "尝试安装docker..."
+                yum -y install *.rpm
+            fi
+            let start_num+=1
+	    fi
+	done
+    systemctl enable docker
 }
+
 uninstall_docker(){
     yum remove -y docker \
     docker-client \
@@ -48,7 +79,7 @@ query(){
 }
 
 develop_docker(){
-    if docker 
+    if docker -v
     # 环境中存在docker
     then 
         # Docker version 19.03.8, build afacb8b
@@ -58,19 +89,19 @@ develop_docker(){
         # 判断版本号是否满足需求
         if [ "$(echo "${version}" 19.03 | awk '{print($1>=$2)?1:0}')" -eq 1 ]
         then
-            start_docker
+            echo -e "\033[34;1m当前docker版本为：${version}, 符合要求 \033[0m"
         else 
             # docker版本不满足需求时，询问是否安装满足需求的docker版本
             choose=$(query "当前docker版本为：${version}，版本不匹配可能导致出错，是否重新安装满足需求docker版本[y/n]:")
             if [[ $choose == "y" ]]
             then
                 uninstall_docker
-                install_docker_local
+                install_docker_offline
             fi
         fi    
     # 环境中不存在docker
     else 
-        install_docker_local
+        install_docker_offline
     fi
     start_docker
 }
@@ -85,6 +116,8 @@ develop_offline(){
     develop_docker
     
 }
+
+# ------------------------------------------------------------------
 
 # -------------------------------main-------------------------------
 
