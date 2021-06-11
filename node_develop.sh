@@ -68,6 +68,65 @@ uninstall_docker(){
 }
 # -------------------------------适配不同linux发行版 end-------------------------------
 
+input_ip(){
+    read -r -p "请输入本机ip：" LOCAL_IP
+    read -r -p "本机ip为：${LOCAL_IP} [y/n] " choose
+    
+    while [[ $choose != "y" && $choose != "n" ]]
+    do
+        read -r -p "请输入本机ip：" LOCAL_IP
+        read -r -p "本机ip为：${LOCAL_IP} [y/n] " choose
+    done
+
+    echo ${LOCAL_IP}
+}
+
+configure_docker(){
+    cd /etc/docker
+    file="/etc/docker/daemon.json"
+    if [ -f $file ]; then
+        echo -e "\033[34;1m /etc/docker/daemon.json文件已存在，该文件将重命名为daemon.json+TIME \033[0m"
+        time=$(date "+%Y-%m-%d_ %H:%M:%S")
+        mv daemon.json "daemon.json+${time}"
+    else
+        touch daemon.json
+    fi
+
+    choose=$(query "是否需要配置harbor仓库地址[y/n]:")
+
+    if [[ $choose == "y" ]]
+    then
+        read -r -p "请输入harbor仓库地址[ip:port]: " HARBOR_IP
+
+        cat >daemon.json<<EOF
+{
+  # 你的Harbor地址
+  "insecure-registries": ["${HARBOR_IP}"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "10"
+  },
+}
+EOF
+
+    else   
+
+        cat >daemon.json<<EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "10"
+  },
+}
+EOF
+
+    fi
+    
+    systemctl daemon-reload
+    systemctl restart docker
+}
 
 query(){
     # 只允许输入y/n，否则循环提示输入
@@ -104,6 +163,7 @@ develop_docker(){
         install_docker_offline
     fi
     start_docker
+    configure_docker
 }
 
 develop_online(){
@@ -131,5 +191,7 @@ main(){
         develop_offline
     fi
 }
+
+LOCAL_IP=$(input_ip)
 
 main
