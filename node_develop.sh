@@ -10,6 +10,7 @@ RedBG="\033[41;37m"
 Font="\033[0m"
 # fonts color
 
+
 # -------------------------------适配不同linux发行版 begin------------------------------
 # centos7上可运行，其他发行版未测试
 uninstall_docker(){
@@ -61,7 +62,7 @@ daemon_reload_command(){
     sudo systemctl daemon-reload
 }
 start_frpc_command(){
-    sudo systemctl start frpc
+    sudo systemctl restart frpc
 }
 check_frpc_status_command(){
     systemctl show --property ActiveState frpc
@@ -100,7 +101,7 @@ install_docker_offline(){
     # 在有网络的环境下下载离线软件到指定目录
     # sudo yum install --downloadonly --downloaddir=~/docker19.03-package docker-ce-19.03.8-3.el7 docker-ce-cli-19.03.8-3.el7
 
-    cd ~/docker-19.03
+    cd /root/docker-19.03
 
     start_num=0
     while true; do
@@ -176,21 +177,30 @@ done
 
 mkdir -p ${FRP_PATH}
 #wget -P ${WORK_PATH} https://ghproxy.com/https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FILE_NAME}.tar.gz -O ${FILE_NAME}.tar.gz && \
-tar -zxvf /root/${FILE_NAME}.tar.gz && \
-mv ${FILE_NAME}/${FRP_NAME} ${FRP_PATH}
+#tar -zxvf /root/${FILE_NAME}.tar.gz && \
+mv /root/${FILE_NAME}/${FRP_NAME} ${FRP_PATH}
+
+
+read -r -p "请输入提供穿透服务的服务器IP：" server_address
+read -r -p "请输入提供穿透服务的服务器端口：" server_port
+read -r -p "（请确认）穿透服务的服务[ip:port]为：${server_address}:${server_port} [y/n] " choose
+while [[ $choose != "y" ]]
+do
+    read -r -p "请输入提供穿透服务的服务器IP：" server_address
+    read -r -p "请输入提供穿透服务的服务器端口：" server_port
+    read -r -p "（请确认）穿透服务的服务[ip:port]为：${server_address}:${server_port} [y/n] " choose
+done
 
 cat >${FRP_PATH}/${FRP_NAME}.ini <<EOF
 [common]
-server_addr = frp.freefrp.net
-server_port = 7000
-token = freefrp.net
+server_address = ${server_address}
+server_port = ${server_port}
 
-[web1_${RANDOM}]
+[ssh-#unique-id#]
 type = tcp
-local_ip = ${LOCAL_IP}
-local_port = 443
-remote_port = 36278
-#custom_domains = yourdomain${RANDOM}.com
+local_ip = 127.0.0.1
+local_port = 22
+remote_port = 0
 EOF
 
 cat >/lib/systemd/system/${FRP_NAME}.service <<EOF
@@ -260,13 +270,15 @@ install_frpc_offline(){
 start_frpc(){
     start_num=0
 	while true; do
+        sleep 2
 	    status=$(check_frpc_status_command)
 	    if [ $status = "ActiveState=active" ]; then
 		    echo "frpc正在运行..."
 		    break
 	    else
             if [ $start_num -eq 3 ]; then
-                echo "frpc启动失败，请检查！" >&2
+                echo "frpc启动失败，请检查frpc.ini！" >&2
+                echo "修改/usr/local/frp/frpc.ini之后，使用systemctl restart frpc启动服务，systemctl status frpc查看服务" >&2
                 exit 1
             else
                 echo "尝试启动frpc..."
@@ -314,7 +326,7 @@ input_ip(){
         read -r -p "请输入本机ip：" LOCAL_IP
         read -r -p "本机ip为：${LOCAL_IP} [y/n] " choose
     done
-
+        
     echo ${LOCAL_IP}
 }
 
@@ -414,16 +426,116 @@ deploy_docker(){
     configure_docker
 }
 
+develop_edgecore(){
+    edge_arch=$(arch)
+    case "$edge_arch" in
+        aarch64) kubeedge_arch="arm64";;
+        x86_64) kubeedge_arch="amd64";;
+        *) echo "不支持该架构: "$edge_arch; exit 1;;
+    esac
+
+    rm -rf /etc/kubeedge
+    #tar xvf /root/kubeedge-v1.6.1-linux-${kubeedge_arch}.tar.gz
+    cd /root/kubeedge-v1.6.1-linux-${kubeedge_arch}/edge/ && mkdir /etc/kubeedge && cp edgecore /etc/kubeedge/
+
+    rm -rf /etc/kubeedge/config
+    mkdir /etc/kubeedge/config
+    ./edgecore --minconfig > /etc/kubeedge/config/edgecore.yaml
+    
+    choose="null"
+    while [[ $choose != "y" ]]
+    do
+        read -r -p "请输入cloud机器IP: " CLOUD_IP
+        read -r -p "cloud机器IP为：${CLOUD_IP} [y/n] " choose
+    done
+
+    choose='null'
+    while [[ $choose != "y" ]]
+    do
+        read -r -p "请输入token值: " token
+        read -r -p "token值为：${token} [y/n] " choose
+    done
+    http_server="https:\/\/${CLOUD_IP}"
+    
+    case "$edge_arch" in
+        aarch64) podSandboxImage="kubeedge\/pause-arm64:3.1";;
+        x86_64) podSandboxImage="kubeedge\/pause:3.1";;
+    esac
+
+    sed -i "s/httpServer.*/httpServer: ${http_server}:10002/" /etc/kubeedge/config/edgecore.yaml
+    sed -i "s/token.*/token: $token/" /etc/kubeedge/config/edgecore.yaml
+    sed -i "s/server:.*/server: ${CLOUD_IP}:10000/" /etc/kubeedge/config/edgecore.yaml
+    sed -i "s/hostnameOverride.*/hostnameOverride: $(hostname)/" /etc/kubeedge/config/edgecore.yaml
+    sed -i "s/nodeIP.*/nodeIP: $LOCAL_IP/" /etc/kubeedge/config/edgecore.yaml
+    sed -i "s/podSandboxImage.*/podSandboxImage: $podSandboxImage/" /etc/kubeedge/config/edgecore.yaml
+
+    rm -rf /etc/systemd/system/edgecore.service 
+    touch /etc/systemd/system/edgecore.service 
+    cat>/etc/systemd/system/edgecore.service<<EOF
+[Unit]
+Description=edgecore.service
+ 
+[Service]
+Type=simple
+ExecStart=/etc/kubeedge/edgecore
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl start edgecore
+    systemctl enable edgecore
+    systemctl status edgecore
+}
+
 develop_online(){
     echo -e "${Green}开始进行边缘节点的在线部署${Font}"
     ###
 }
+init(){
+    systemctl stop firewalld
+    systemctl disable firewalld
+
+    # 关闭 SeLinux
+    setenforce 0
+    sed -i "s/SELINUX=enforcing/SELINUX=disabled/g" /etc/selinux/config
+
+    # 关闭 swap
+    swapoff -a
+    yes | cp /etc/fstab /etc/fstab_bak
+    cat /etc/fstab_bak |grep -v swap > /etc/fstab
+
+    # 修改 /etc/sysctl.conf
+    # 如果有配置，则修改    
+    # sed -i "s#^net.ipv4.ip_forward.*#net.ipv4.ip_forward=1#g"  /etc/sysctl.conf
+    # sed -i "s#^net.bridge.bridge-nf-call-ip6tables.*#net.bridge.bridge-nf-call-ip6tables=1#g"  /etc/sysctl.conf
+    # sed -i "s#^net.bridge.bridge-nf-call-iptables.*#net.bridge.bridge-nf-call-iptables=1#g"  /etc/sysctl.conf
+    # sed -i "s#^net.ipv6.conf.all.disable_ipv6.*#net.ipv6.conf.all.disable_ipv6=1#g"  /etc/sysctl.conf
+    # sed -i "s#^net.ipv6.conf.default.disable_ipv6.*#net.ipv6.conf.default.disable_ipv6=1#g"  /etc/sysctl.conf
+    # sed -i "s#^net.ipv6.conf.lo.disable_ipv6.*#net.ipv6.conf.lo.disable_ipv6=1#g"  /etc/sysctl.conf
+    # sed -i "s#^net.ipv6.conf.all.forwarding.*#net.ipv6.conf.all.forwarding=1#g"  /etc/sysctl.conf
+    # 可能没有，追加
+    rm -rf /etc/sysctl.conf
+    touch /etc/sysctl.conf
+    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+    # echo "net.bridge.bridge-nf-call-ip6tables = 1" >> /etc/sysctl.conf
+    # echo "net.bridge.bridge-nf-call-iptables = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.lo.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.all.forwarding = 1"  >> /etc/sysctl.conf
+    # 执行命令以应用
+    sysctl -p
+}
+
 
 develop_offline(){
     echo -e "${Green}开始进行边缘节点的离线部署${Font}"
+    init
     deploy_docker
-    # develop_edgecore
-
+    develop_edgecore
     deploy_frpc
 }
 
@@ -438,7 +550,7 @@ main(){
 
     if [[ $choose == "y" ]]
     then
-        develop_online
+        develop_online  
     else 
         develop_offline
     fi
